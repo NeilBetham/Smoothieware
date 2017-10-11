@@ -47,6 +47,8 @@ private:
     uint32_t queue_delay_time_ms;
     size_t queue_size;
     float current_feedrate{0}; // actual nominal feedrate that current block is running at in mm/sec
+    double driver_enable_delay_time_s;
+    bool driver_delay_active;
 
     struct {
         volatile bool running:1;

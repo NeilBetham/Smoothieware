@@ -30,6 +30,7 @@
 
 #define planner_queue_size_checksum CHECKSUM("planner_queue_size")
 #define queue_delay_time_ms_checksum CHECKSUM("queue_delay_time_ms")
+#define driver_enable_delay_time_s_checksum CHECKSUM("driver_enable_delay_time_s")
 
 /*
  * The conveyor holds the queue of blocks, takes care of creating them, and starting the executing chain of blocks
@@ -75,6 +76,7 @@ void Conveyor::on_module_loaded()
     //THEKERNEL->step_ticker->finished_fnc = std::bind( &Conveyor::all_moves_finished, this);
     queue_size = THEKERNEL->config->value(planner_queue_size_checksum)->by_default(32)->as_number();
     queue_delay_time_ms = THEKERNEL->config->value(queue_delay_time_ms_checksum)->by_default(100)->as_number();
+    driver_enable_delay_time_s = THEKERNEL->config->value(driver_enable_delay_time_s_checksum)->by_default("0.0")->as_number();
 }
 
 // we allocate the queue here after config is completed so we do not run out of memory during config
@@ -167,10 +169,29 @@ void Conveyor::queue_head_block()
         return; // if we got a halt then we are done here
     }
 
+    // Check if any of the steppers are disabled, if any are we need to delay if one is configured.
+    if(driver_enable_delay_time_s) {
+        for(auto &a : THEROBOT->actuators) {
+            if(!a->is_enabled()){
+                driver_delay_active = true;
+                break;
+            }
+        }
+    }
+
     queue.produce_head();
 
     // not sure if this is the correct place but we need to turn on the motors if they were not already on
     THEKERNEL->call_event(ON_ENABLE, (void*)1); // turn all enable pins on
+
+    // Wait for the stepper driver enable delay if we need to
+    if(driver_delay_active){
+        uint32_t delay_start = us_ticker_read();
+        while ((us_ticker_read() - delay_start) < driver_enable_delay_time_s * 1000000) {
+            THEKERNEL->call_event(ON_IDLE, this);
+        }
+        driver_delay_active = false;
+    }
 }
 
 void Conveyor::check_queue(bool force)
@@ -206,6 +227,9 @@ bool Conveyor::get_next_block(Block **block)
     this->current_feedrate= 0;
 
     if(THEKERNEL->is_halted() || queue.isr_tail_i == queue.head_i) return false; // we do not have anything to give
+
+    // If a driver delay is active, don't hand out any blocks
+    if(driver_delay_active) return false;
 
     // wait for queue to fill up, optimizes planning
     if(!allow_fetch) return false;
